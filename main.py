@@ -13,6 +13,8 @@ BEST_SHAPES = ['Round', 'Princess', 'Cushion', 'Oval', 'Emerald', 'Asscher', 'Ra
 BEST_COLORS = ['D', 'E', 'F', 'G']
 MIN_CARAT = 0.5
 BEST_CLARITIES = ['IF', 'VVS1', 'VVS2', 'VS1', 'VS2']
+# BEST_PRICING_THRESHOLD defines the maximum allowed price (after markup) per carat.
+BEST_PRICING_THRESHOLD = 10000  # USD per carat
 
 # ----------------------------
 # FTP DOWNLOAD CONFIGURATION
@@ -132,18 +134,20 @@ class RedditCatalogProcessor:
         df = pd.read_csv(file_path, dtype=str)
         df = df.fillna('')
 
-        # Create a numeric column for filtering carat values
+        # Convert the "carats" field to numeric for filtering
         df['carats_numeric'] = pd.to_numeric(df.get('carats', 0), errors='coerce')
 
         # ----------------------------
-        # FILTER TO CHOOSE THE BEST DIAMONDS
+        # QUALITY FILTERING
         # ----------------------------
         if product_type in ['natural', 'lab_grown']:
+            # Use columns 'shape', 'col', 'clar' for diamonds.
             df = df[df['shape'].isin(BEST_SHAPES)]
             df = df[df['col'].isin(BEST_COLORS)]
             df = df[df['carats_numeric'] >= MIN_CARAT]
             df = df[df['clar'].isin(BEST_CLARITIES)]
         elif product_type == 'gemstone':
+            # Gemstones may use different column names. Here we assume color is in 'Color'
             df = df[df['shape'].isin(BEST_SHAPES)]
             df = df[df['Color'].isin(BEST_COLORS)]
             df = df[df['carats_numeric'] >= MIN_CARAT]
@@ -152,8 +156,27 @@ class RedditCatalogProcessor:
         else:
             raise ValueError("Unsupported product type")
 
-        # Remove temporary filtering column
-        df.drop(columns=['carats_numeric'], inplace=True)
+        # ----------------------------
+        # BEST PRICING FILTER (for diamonds only)
+        # ----------------------------
+        # Only for natural and lab grown – compute price per carat (after markup)
+        if product_type in ['natural', 'lab_grown']:
+            # First, convert the price column from CSV to numeric then apply our markup
+            df['price'] = pd.to_numeric(df.get('price', 0), errors='coerce').fillna(0)
+            df['price'] = df['price'].apply(self.markup)
+            # Compute price per carat
+            df['price_per_carat'] = df['price'] / df['carats_numeric']
+            filtered_df = df[df['price_per_carat'] <= BEST_PRICING_THRESHOLD]
+            if filtered_df.empty:
+                print(f"No records met the pricing criteria for {product_type} diamonds; using quality filtered data.")
+            else:
+                df = filtered_df
+            # Remove the temporary pricing column
+            df.drop(columns=['price_per_carat'], inplace=True)
+        else:
+            # For gemstones, simply apply markup to price.
+            df['price'] = pd.to_numeric(df.get('price', 0), errors='coerce').fillna(0)
+            df['price'] = df['price'].apply(self.markup)
 
         # ----------------------------
         # CLEAN IMAGE URL IF PRESENT
@@ -164,11 +187,8 @@ class RedditCatalogProcessor:
         else:
             df['image'] = ''
 
-        # ----------------------------
-        # Convert and mark up price values
-        # ----------------------------
-        df['price'] = pd.to_numeric(df.get('price', 0), errors='coerce').fillna(0)
-        df['price'] = df['price'].apply(self.markup)
+        # Remove the helper column for carats after filtering
+        df.drop(columns=['carats_numeric'], inplace=True)
 
         # ----------------------------
         # Choose the proper template based on product type
