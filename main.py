@@ -300,13 +300,36 @@ class RedditCatalogProcessor:
             # Step 1: Download raw files from FTP
             download_all_files()
 
-            # Step 2: Process each file and combine them
-            dataframes = []
+            # Step 2: Process each file
+            processed_dfs = {}
             for product_type, file_info in self.files_to_load.items():
                 df = self.process_file(file_info["file_path"], product_type)
-                dataframes.append(df)
+                processed_dfs[product_type] = df
 
+            # Determine the maximum allowed rows per category 
+            # so that the total across categories is under 100,000 products
+            max_total = 100000
+            num_categories = len(processed_dfs)  # ideally 3 categories: natural, lab_grown, gemstone
+            max_per_category = max_total // num_categories  # e.g., 33333
+
+            # Find the minimum available count among the three categories;
+            # even if max_per_category is higher, we can only take as many as available.
+            min_available = min(len(df) for df in processed_dfs.values())
+            # The number to take from each category is the minimum of the maximum allowed and the smallest count
+            n = min(max_per_category, min_available)
+
+            # For each category, randomly sample n records (or take all if not exceeding n)
+            dataframes = []
+            for product_type, df in processed_dfs.items():
+                if len(df) > n:
+                    df_sample = df.sample(n=n, random_state=42)
+                else:
+                    df_sample = df
+                dataframes.append(df_sample)
+
+            # Combine the equally sampled dataframes
             combined_df = pd.concat(dataframes, ignore_index=True)
+
             # Reorder columns to match the Reddit catalog structure:
             reddit_columns = [
                 "id", "title", "description", "link", "image_link", "price",
