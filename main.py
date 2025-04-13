@@ -7,6 +7,14 @@ import random
 import re
 
 # ----------------------------
+# QUALITY FILTERING PARAMETERS
+# ----------------------------
+BEST_SHAPES = ['Round', 'Princess', 'Cushion', 'Oval', 'Emerald', 'Asscher', 'Radiant', 'Pear', 'Marquise', 'Heart']
+BEST_COLORS = ['D', 'E', 'F', 'G']
+MIN_CARAT = 0.5
+BEST_CLARITIES = ['IF', 'VVS1', 'VVS2', 'VS1', 'VS2']
+
+# ----------------------------
 # FTP DOWNLOAD CONFIGURATION
 # ----------------------------
 FTP_SERVER = "ftp.nivoda.net"
@@ -49,6 +57,31 @@ def download_all_files():
     """Download all raw files from the FTP server."""
     for product_type, file_info in ftp_files.items():
         download_file_from_ftp(file_info["remote_filename"], file_info["local_path"])
+
+# ----------------------------
+# FUNCTION TO SAVE CSV WITH SIZE LIMIT
+# ----------------------------
+def save_dataframe_with_limit(df, output_file, size_limit=200 * 1024 * 1024):
+    """
+    Save DataFrame to CSV and split into parts if file exceeds the given size limit.
+    size_limit is in bytes (default 200 MB).
+    """
+    df.to_csv(output_file, index=False)
+    file_size = os.path.getsize(output_file)
+    if file_size <= size_limit:
+        print(f"File {output_file} size {file_size} bytes is within the limit.")
+    else:
+        print(f"File {output_file} size {file_size} bytes exceeds limit. Splitting...")
+        num_parts = file_size // size_limit + 1
+        total_rows = len(df)
+        chunk_size = total_rows // num_parts + 1
+        for i in range(num_parts):
+            part_file = output_file.replace(".csv", f"_part{i+1}.csv")
+            df_chunk = df.iloc[i * chunk_size:(i + 1) * chunk_size]
+            df_chunk.to_csv(part_file, index=False)
+            print(f"Saved chunk {i+1} to {part_file}")
+        os.remove(output_file)
+        print(f"Removed original file {output_file} as it was split into {num_parts} parts.")
 
 # ----------------------------
 # REDDIT CATALOG PROCESSING SCRIPT
@@ -98,19 +131,50 @@ class RedditCatalogProcessor:
     def process_file(self, file_path, product_type):
         df = pd.read_csv(file_path, dtype=str)
         df = df.fillna('')
+        
+        # Create a numeric column for filtering carat values
+        df['carats_numeric'] = pd.to_numeric(df.get('carats', 0), errors='coerce')
 
-        # Extract valid image URLs if the 'image' column exists
+        # ----------------------------
+        # FILTER TO CHOOSE THE BEST DIAMONDS
+        # ----------------------------
+        if product_type in ['natural', 'lab_grown']:
+            # For these products, expect 'shape', 'col', and 'clar' columns
+            df = df[df['shape'].isin(BEST_SHAPES)]
+            df = df[df['col'].isin(BEST_COLORS)]
+            df = df[df['carats_numeric'] >= MIN_CARAT]
+            df = df[df['clar'].isin(BEST_CLARITIES)]
+        elif product_type == 'gemstone':
+            # For gemstones, the color column is 'Color' and clarity may be 'Clarity'
+            df = df[df['shape'].isin(BEST_SHAPES)]
+            df = df[df['Color'].isin(BEST_COLORS)]
+            df = df[df['carats_numeric'] >= MIN_CARAT]
+            if 'Clarity' in df.columns:
+                df = df[df['Clarity'].isin(BEST_CLARITIES)]
+        else:
+            raise ValueError("Unsupported product type")
+            
+        # Optionally, drop the temporary numeric column used for filtering
+        df.drop(columns=['carats_numeric'], inplace=True)
+
+        # ----------------------------
+        # CLEAN IMAGE URL IF PRESENT
+        # ----------------------------
         if 'image' in df.columns:
             df['image'] = df['image'].str.extract(r'(https?://.*\.(jpg|png))')[0].fillna('')
             df = df[df['image'] != '']
         else:
             df['image'] = ''
 
+        # ----------------------------
         # Convert and mark up price values
+        # ----------------------------
         df['price'] = pd.to_numeric(df.get('price', 0), errors='coerce').fillna(0)
         df['price'] = df['price'].apply(self.markup)
 
+        # ----------------------------
         # Choose the proper template based on product type
+        # ----------------------------
         if product_type == "natural":
             template = self.reddit_template_natural
         elif product_type == "lab_grown":
@@ -316,10 +380,11 @@ class RedditCatalogProcessor:
             # Step 2: Process each file separately and save individual CSVs per product type
             for product_type, file_info in self.files_to_load.items():
                 df = self.process_file(file_info["file_path"], product_type)
-                df = df[reddit_columns]  # reorder columns
+                # Reorder columns as required for the Reddit catalog
+                df = df[reddit_columns]
                 output_file = os.path.join(self.output_folder, f"{product_type}_reddit_catalog.csv")
-                df.to_csv(output_file, index=False)
-                print(f"{product_type.capitalize()} Reddit catalog saved to {output_file}")
+                save_dataframe_with_limit(df, output_file)
+                print(f"{product_type.capitalize()} Reddit catalog saved (and split if needed).")
 
             # Step 3: Upload generated files to Google Cloud Storage
             self.upload_to_gcs()
