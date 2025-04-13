@@ -300,14 +300,6 @@ class RedditCatalogProcessor:
             # Step 1: Download raw files from FTP
             download_all_files()
 
-            # Step 2: Process each file and combine them
-            dataframes = []
-            for product_type, file_info in self.files_to_load.items():
-                df = self.process_file(file_info["file_path"], product_type)
-                dataframes.append(df)
-
-            combined_df = pd.concat(dataframes, ignore_index=True)
-            # Reorder columns to match the Reddit catalog structure:
             reddit_columns = [
                 "id", "title", "description", "link", "image_link", "price",
                 "item_group_id", "gtin", "mpn", "google_product_category", "product_type",
@@ -320,14 +312,16 @@ class RedditCatalogProcessor:
                 "custom_label_2", "custom_label_3", "custom_label_4", "custom_number_0",
                 "custom_number_1", "custom_number_2", "custom_number_3", "custom_number_4"
             ]
-            combined_df = combined_df[reddit_columns]
 
-            # Save the combined Reddit catalog to the output folder
-            combined_file = os.path.join(self.output_folder, "combined_reddit_catalog.csv")
-            combined_df.to_csv(combined_file, index=False)
-            print(f"Combined Reddit catalog saved to {combined_file}")
+            # Step 2: Process each file separately and save individual CSVs per product type
+            for product_type, file_info in self.files_to_load.items():
+                df = self.process_file(file_info["file_path"], product_type)
+                df = df[reddit_columns]  # reorder columns
+                output_file = os.path.join(self.output_folder, f"{product_type}_reddit_catalog.csv")
+                df.to_csv(output_file, index=False)
+                print(f"{product_type.capitalize()} Reddit catalog saved to {output_file}")
 
-            # Upload generated files to Google Cloud Storage
+            # Step 3: Upload generated files to Google Cloud Storage
             self.upload_to_gcs()
             print("Processing completed successfully")
         except Exception as e:
