@@ -64,14 +64,14 @@ def download_all_files():
 def save_dataframe_with_limit(df, output_file, size_limit=200 * 1024 * 1024):
     """
     Save DataFrame to CSV and split into parts if file exceeds the given size limit.
-    size_limit is in bytes (default 200 MB).
+    The size_limit is in bytes (default 200 MB).
     """
     df.to_csv(output_file, index=False)
     file_size = os.path.getsize(output_file)
     if file_size <= size_limit:
         print(f"File {output_file} size {file_size} bytes is within the limit.")
     else:
-        print(f"File {output_file} size {file_size} bytes exceeds limit. Splitting...")
+        print(f"File {output_file} size {file_size} bytes exceeds the limit. Splitting...")
         num_parts = file_size // size_limit + 1
         total_rows = len(df)
         chunk_size = total_rows // num_parts + 1
@@ -131,7 +131,7 @@ class RedditCatalogProcessor:
     def process_file(self, file_path, product_type):
         df = pd.read_csv(file_path, dtype=str)
         df = df.fillna('')
-        
+
         # Create a numeric column for filtering carat values
         df['carats_numeric'] = pd.to_numeric(df.get('carats', 0), errors='coerce')
 
@@ -139,13 +139,11 @@ class RedditCatalogProcessor:
         # FILTER TO CHOOSE THE BEST DIAMONDS
         # ----------------------------
         if product_type in ['natural', 'lab_grown']:
-            # For these products, expect 'shape', 'col', and 'clar' columns
             df = df[df['shape'].isin(BEST_SHAPES)]
             df = df[df['col'].isin(BEST_COLORS)]
             df = df[df['carats_numeric'] >= MIN_CARAT]
             df = df[df['clar'].isin(BEST_CLARITIES)]
         elif product_type == 'gemstone':
-            # For gemstones, the color column is 'Color' and clarity may be 'Clarity'
             df = df[df['shape'].isin(BEST_SHAPES)]
             df = df[df['Color'].isin(BEST_COLORS)]
             df = df[df['carats_numeric'] >= MIN_CARAT]
@@ -153,8 +151,8 @@ class RedditCatalogProcessor:
                 df = df[df['Clarity'].isin(BEST_CLARITIES)]
         else:
             raise ValueError("Unsupported product type")
-            
-        # Optionally, drop the temporary numeric column used for filtering
+
+        # Remove temporary filtering column
         df.drop(columns=['carats_numeric'], inplace=True)
 
         # ----------------------------
@@ -293,7 +291,6 @@ class RedditCatalogProcessor:
         }
 
     def reddit_template_gemstone(self, row):
-        # For gemstones, some column names differ (e.g., 'gemType', 'Color', 'Clarity', etc.)
         price = float(row['price']) if row['price'] else 0.0
         sale_price = round(price * 0.95, 2) if price else 0.0
         cost = round(price * 0.9, 2) if price else 0.0
@@ -380,8 +377,8 @@ class RedditCatalogProcessor:
             # Step 2: Process each file separately and save individual CSVs per product type
             for product_type, file_info in self.files_to_load.items():
                 df = self.process_file(file_info["file_path"], product_type)
-                # Reorder columns as required for the Reddit catalog
-                df = df[reddit_columns]
+                # Use reindex to ensure the DataFrame contains the desired columns (even if empty)
+                df = df.reindex(columns=reddit_columns)
                 output_file = os.path.join(self.output_folder, f"{product_type}_reddit_catalog.csv")
                 save_dataframe_with_limit(df, output_file)
                 print(f"{product_type.capitalize()} Reddit catalog saved (and split if needed).")
