@@ -13,7 +13,7 @@ BEST_SHAPES = ['Round', 'Princess', 'Cushion', 'Oval', 'Emerald', 'Asscher', 'Ra
 BEST_COLORS = ['D', 'E', 'F', 'G']
 MIN_CARAT = 0.5
 BEST_CLARITIES = ['IF', 'VVS1', 'VVS2', 'VS1', 'VS2']
-# BEST_PRICING_THRESHOLD defines the maximum allowed price (after markup) per carat.
+# Best pricing threshold (maximum USD per carat)
 BEST_PRICING_THRESHOLD = 10000  # USD per carat
 
 # ----------------------------
@@ -90,7 +90,7 @@ def save_dataframe_with_limit(df, output_file, size_limit=200 * 1024 * 1024):
 # ----------------------------
 class RedditCatalogProcessor:
     def __init__(self):
-        # Use the downloaded files from FTP.
+        # Define file paths for FTP downloaded CSV files.
         self.files_to_load = {
             "natural": {
                 "file_path": os.path.join(os.environ.get("FTP_DOWNLOAD_DIR", "/tmp/raw"), "Natural.csv")
@@ -102,19 +102,19 @@ class RedditCatalogProcessor:
                 "file_path": os.path.join(os.environ.get("FTP_DOWNLOAD_DIR", "/tmp/raw"), "gemstones.csv")
             }
         }
-        # Google Cloud Storage configuration via environment variables
+        # Google Cloud Storage configuration via environment variables.
         self.gcs_config = {
             "bucket_name": os.environ.get("BUCKET_NAME", "sitemaps.leeladiamond.com"),
             "bucket_folder": os.environ.get("BUCKET_FOLDER", "redditcatalog")
         }
-        # Output folder for generated Reddit catalog files; default to /tmp/reddit_output
+        # Output folder for generated catalog files; default to /tmp/reddit_output.
         self.output_folder = os.environ.get("OUTPUT_FOLDER", "/tmp/reddit_output")
         os.makedirs(self.output_folder, exist_ok=True)
 
     def markup(self, x):
         """
-        Computes a marked-up price based on the raw value.
-        The calculation applies a base multiplier and an additional fee based on price tiers.
+        Compute a marked-up price based on the raw value.
+        Applies a base multiplier and an additional fee based on price tiers.
         """
         base = x * 1.05 * 1.13
         additional = (
@@ -133,48 +133,50 @@ class RedditCatalogProcessor:
     def process_file(self, file_path, product_type):
         df = pd.read_csv(file_path, dtype=str)
         df = df.fillna('')
-
-        # Convert the "carats" field to numeric for filtering
+        
+        # Convert "carats" to a numeric column.
         df['carats_numeric'] = pd.to_numeric(df.get('carats', 0), errors='coerce')
 
         # ----------------------------
         # QUALITY FILTERING
         # ----------------------------
         if product_type in ['natural', 'lab_grown']:
-            # Use columns 'shape', 'col', 'clar' for diamonds.
-            df = df[df['shape'].isin(BEST_SHAPES)]
-            df = df[df['col'].isin(BEST_COLORS)]
-            df = df[df['carats_numeric'] >= MIN_CARAT]
-            df = df[df['clar'].isin(BEST_CLARITIES)]
+            quality_df = df[
+                df['shape'].isin(BEST_SHAPES) &
+                df['col'].isin(BEST_COLORS) &
+                (df['carats_numeric'] >= MIN_CARAT) &
+                df['clar'].isin(BEST_CLARITIES)
+            ]
         elif product_type == 'gemstone':
-            # Gemstones may use different column names. Here we assume color is in 'Color'
-            df = df[df['shape'].isin(BEST_SHAPES)]
-            df = df[df['Color'].isin(BEST_COLORS)]
-            df = df[df['carats_numeric'] >= MIN_CARAT]
-            if 'Clarity' in df.columns:
-                df = df[df['Clarity'].isin(BEST_CLARITIES)]
+            quality_df = df[
+                df['shape'].isin(BEST_SHAPES) &
+                df['Color'].isin(BEST_COLORS) &
+                (df['carats_numeric'] >= MIN_CARAT)
+            ]
+            if 'Clarity' in quality_df.columns:
+                quality_df = quality_df[quality_df['Clarity'].isin(BEST_CLARITIES)]
         else:
             raise ValueError("Unsupported product type")
+
+        if quality_df.empty:
+            print(f"Warning: No records met the strict quality filters for {product_type}; falling back to broader data.")
+            quality_df = df.copy()
+        df = quality_df.copy()
 
         # ----------------------------
         # BEST PRICING FILTER (for diamonds only)
         # ----------------------------
-        # Only for natural and lab grown – compute price per carat (after markup)
         if product_type in ['natural', 'lab_grown']:
-            # First, convert the price column from CSV to numeric then apply our markup
             df['price'] = pd.to_numeric(df.get('price', 0), errors='coerce').fillna(0)
             df['price'] = df['price'].apply(self.markup)
-            # Compute price per carat
             df['price_per_carat'] = df['price'] / df['carats_numeric']
-            filtered_df = df[df['price_per_carat'] <= BEST_PRICING_THRESHOLD]
-            if filtered_df.empty:
-                print(f"No records met the pricing criteria for {product_type} diamonds; using quality filtered data.")
+            pricing_df = df[df['price_per_carat'] <= BEST_PRICING_THRESHOLD]
+            if pricing_df.empty:
+                print(f"Warning: No records met the pricing criteria for {product_type} diamonds; using quality filtered data.")
             else:
-                df = filtered_df
-            # Remove the temporary pricing column
+                df = pricing_df.copy()
             df.drop(columns=['price_per_carat'], inplace=True)
         else:
-            # For gemstones, simply apply markup to price.
             df['price'] = pd.to_numeric(df.get('price', 0), errors='coerce').fillna(0)
             df['price'] = df['price'].apply(self.markup)
 
@@ -187,11 +189,11 @@ class RedditCatalogProcessor:
         else:
             df['image'] = ''
 
-        # Remove the helper column for carats after filtering
+        # Remove the helper column for carats.
         df.drop(columns=['carats_numeric'], inplace=True)
 
         # ----------------------------
-        # Choose the proper template based on product type
+        # APPLY TEMPLATE TO STRUCTURE DATA
         # ----------------------------
         if product_type == "natural":
             template = self.reddit_template_natural
@@ -202,7 +204,6 @@ class RedditCatalogProcessor:
         else:
             raise ValueError("Unsupported product type")
 
-        # Apply the template to each row to build our Reddit catalog fields
         processed_df = df.apply(lambda row: pd.Series(template(row)), axis=1)
         return processed_df
 
@@ -378,7 +379,7 @@ class RedditCatalogProcessor:
 
     def run(self):
         try:
-            # Step 1: Download raw files from FTP
+            # Step 1: Download raw files from FTP.
             download_all_files()
 
             reddit_columns = [
@@ -394,16 +395,16 @@ class RedditCatalogProcessor:
                 "custom_number_1", "custom_number_2", "custom_number_3", "custom_number_4"
             ]
 
-            # Step 2: Process each file separately and save individual CSVs per product type
+            # Step 2: Process each product file separately and save individual CSVs.
             for product_type, file_info in self.files_to_load.items():
                 df = self.process_file(file_info["file_path"], product_type)
-                # Use reindex to ensure the DataFrame contains the desired columns (even if empty)
+                # Ensure the DataFrame has all required columns even if empty.
                 df = df.reindex(columns=reddit_columns)
                 output_file = os.path.join(self.output_folder, f"{product_type}_reddit_catalog.csv")
                 save_dataframe_with_limit(df, output_file)
                 print(f"{product_type.capitalize()} Reddit catalog saved (and split if needed).")
 
-            # Step 3: Upload generated files to Google Cloud Storage
+            # Step 3: Upload generated files to Google Cloud Storage.
             self.upload_to_gcs()
             print("Processing completed successfully")
         except Exception as e:
