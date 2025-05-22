@@ -12,7 +12,7 @@ import re
 FTP_SERVER = "ftp.nivoda.net"
 FTP_PORT = 21
 FTP_USERNAME = "leeladiamondscorporate@gmail.com"
-FTP_PASSWORD = "r[Eu;9NB"
+FTP_PASSWORD = "1yH£lG4n0Mq"
 
 # Set download directory from env (defaults to /tmp/raw)
 ftp_download_dir = os.environ.get("FTP_DOWNLOAD_DIR", "/tmp/raw")
